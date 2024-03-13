@@ -1,0 +1,170 @@
+---
+title: "Project Based - Toward a Data Mining Portfolio"
+author: "trieutran"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(error=TRUE,        # Keep compiling upon error
+                      collapse=FALSE,    # collapse by default
+                      echo=TRUE,         # echo code by default
+                      comment = "#>",    # change comment character
+                      fig.width = 5.5,     # set figure width
+                      fig.align = "center",# set figure position
+                      out.width = "49%", # set width of displayed images
+                      warning=FALSE,     # do not show R warnings
+                      message=FALSE,     # do not show R messages
+                      row.print=25)
+```
+
+```{r message=FALSE}
+#install and load packages
+if(!require('mlbench')) {
+    install.packages('mlbench')
+    library('mlbench')
+}
+```
+
+``` {r}
+#load data
+data(BreastCancer)
+summary(c)
+```
+
+```{r}
+#remove rows with missing values
+BreastCancer <- na.omit(BreastCancer)
+# remove the unique identifier
+BreastCancer$Id <- NULL 
+```
+
+``` {r}
+# partition the data set for 80% training and 20% evaluation
+set.seed(2)
+ind <- sample(2, nrow(BreastCancer), replace = TRUE, prob=c(0.8, 0.2))
+train <- BreastCancer[ind == 1,]
+valid <- BreastCancer[ind == 2,]
+```
+
+# 1. Decision tree 
+``` {r}
+# create model using recursive partitioning on the training data set
+require(rpart)
+decisionTree <- rpart(Class ~ ., data=train)
+# predict classes for the evaluation data set
+decisionTree.pred <- predict(decisionTree, type="class", newdata=valid)
+# score the evaluation data set (extract the probabilities)
+decisionTree.prob <- predict(decisionTree, type="prob", newdata=valid)
+
+# view the decision tree
+plot(decisionTree, main="Decision tree created using rpart")
+```
+
+# 2. Conditional inference trees
+```{r message=FALSE}
+# create model using conditional inference trees
+require(party)
+conditionalTree <- ctree(Class ~ ., data=train)
+conditionalTree.pred <- predict(conditionalTree, newdata=valid)
+conditionalTree.prob <-  1- unlist(treeresponse(conditionalTree, valid), use.names=F)[seq(1,nrow(valid)*2,2)]
+plot(conditionalTree, main="Decision tree created using condition inference trees")
+```
+
+# 3. Random forest and bagging ensemble using conditional inference trees
+```{r}
+# create model using random forest and bagging ensemble using conditional inference trees
+conditionalForest <- cforest(Class ~ ., data=train, 
+                             control = cforest_unbiased(mtry = ncol(BreastCancer)-2))
+conditionalForest.pred <- predict(conditionalForest, 
+                                  newdata=valid)
+conditionalForest.prob <-  1- unlist(treeresponse(conditionalForest, valid),
+                                     use.names=F)[seq(1,nrow(valid)*2,2)]
+```
+
+# 4. Bagging
+```{r}
+# create model using bagging (bootstrap aggregating)
+require(ipred)
+bag <- bagging(Class ~ ., data=train)
+bag.pred <- predict(bag, newdata=valid)
+bag.prob <- predict(bag, type="prob", newdata=valid)
+```
+
+# 5. Support vector machine 
+```{r}
+# create model using svm (support vector machine)
+require(e1071)
+
+# svm requires tuning
+x.svm.tune <- tune(svm, Class~., data = train,
+                   ranges = list(gamma = 2^(-8:1), cost = 2^(0:4)),
+                   tunecontrol = tune.control(sampling = "fix"))
+# display the tuning results (in text format)
+x.svm.tune
+# If the tuning results are on the margin of the parameters (e.g., gamma = 2^-8), 
+# then widen the parameters.
+# I manually copied the cost and gamma from console messages above to parameters below.
+x.svm <- svm(Class~., data = train, cost=4, gamma=0.0625, probability = TRUE)
+x.svm.prob <- predict(x.svm, type="prob", newdata=valid, probability = TRUE)
+svm.pred <- predict(x.svm, newdata=valid)
+```
+
+# 6. Performance measures - Confusion Matrices
+```{r}
+library(caret)
+# 1. Decision tree 
+confusionMatrix(valid$Clas, decisionTree.pred)
+# 2. Conditional inference trees
+confusionMatrix(valid$Clas, conditionalTree.pred)
+# 3. Random forest and bagging ensemble using conditional inference trees
+confusionMatrix(valid$Clas, conditionalForest.pred)
+# 4. Bagging
+confusionMatrix(valid$Clas, bag.pred)
+# 5. Support vector machine 
+confusionMatrix(valid$Clas, svm.pred)
+```
+
+# 7. ROC curves to compare the performance of the 5 classifiers
+```{r}
+# plot ROC curves to compare the performance of the individual classifiers
+png(filename="/Users/trieutlh/Library/CloudStorage/OneDrive-UW/TBANLT 560/extraCredit/figures/roc_curve_5_models.png",
+    width=700, height=500)
+
+# load the ROCR package which draws the ROC curves
+require(ROCR)
+
+# create an ROCR prediction object from rpart() probabilities
+decisionTree.prob.rocr <- prediction(decisionTree.prob[,2], valid$Class)
+# prepare an ROCR performance object for ROC curve (tpr=true positive rate, fpr=false positive rate)
+decisionTree.perf <- performance(decisionTree.prob.rocr, "tpr","fpr")
+# plot it
+plot(decisionTree.perf, col=2, main="ROC curves comparing classification performance of 5 ML models")
+
+# Draw a legend.
+legend(0.6, 0.6, c('rpart', 'ctree', 'cforest','bagging','svm'), 2:6)
+
+# ctree
+conditionalTree.prob.rocr <- prediction(conditionalTree.prob, BreastCancer[ind == 2,'Class'])
+conditionalTree.perf <- performance(conditionalTree.prob.rocr, "tpr","fpr")
+plot(conditionalTree.perf, col=3, add=TRUE)
+
+# cforest
+conditionalForest.prob.rocr <- prediction(conditionalForest.prob, BreastCancer[ind == 2,'Class'])
+conditionalForest.perf <- performance(conditionalForest.prob.rocr, "tpr","fpr")
+plot(conditionalForest.perf, col=4, add=TRUE)
+
+# bagging
+bag.prob.rocr <- prediction(bag.prob[,2], BreastCancer[ind == 2,'Class'])
+bag.perf <- performance(bag.prob.rocr, "tpr","fpr")
+plot(bag.perf, col=5, add=TRUE)
+
+# svm
+svm.prob.rocr <- prediction(attr(x.svm.prob, "probabilities")[,2], BreastCancer[ind == 2,'Class'])
+svm.perf <- performance(svm.prob.rocr, "tpr","fpr")
+plot(svm.perf, col=6, add=TRUE)
+
+# Close and save the PNG file.
+dev.off()
+```
+
